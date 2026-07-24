@@ -1,0 +1,78 @@
+name: Build PTI Premium APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Download official PTI branding
+        run: |
+          mkdir -p assets
+          curl -fL --retry 3 --connect-timeout 20 "https://pettradeinnovations.com/assets/img/pti-logo.svg" -o assets/pti-logo.svg || true
+          curl -fL --retry 3 --connect-timeout 20 "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcS0NQudyGkHD2nYDNvC4HKL92ZHtbo2t1P2qEQzSoSzrw&s=10" -o assets/app-icon.png || true
+          test -s assets/pti-logo.svg
+          test -s assets/app-icon.png
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Create Android project
+        run: |
+          rm -rf android test
+          flutter create . --platforms=android --project-name=pet_trade_innovations --org=com.pettradeinnovations
+          rm -rf test
+
+      - name: Configure Android
+        run: |
+          python3 - <<'PY2'
+          from pathlib import Path
+          manifest=Path('android/app/src/main/AndroidManifest.xml')
+          t=manifest.read_text()
+          marker='<manifest xmlns:android="http://schemas.android.com/apk/res/android">'
+          for p in ['<uses-permission android:name="android.permission.INTERNET" />','<uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />','<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />']:
+              if p not in t: t=t.replace(marker,marker+'\n    '+p,1)
+          t=t.replace('android:label="pet_trade_innovations"','android:label="Pet Trade Innovations"')
+          manifest.write_text(t)
+          g=Path('android/app/build.gradle.kts')
+          s=g.read_text()
+          if 'isCoreLibraryDesugaringEnabled = true' not in s:
+              s=s.replace('compileOptions {','compileOptions {\n        isCoreLibraryDesugaringEnabled = true',1)
+          dep='coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")'
+          if dep not in s:
+              s += '\n\ndependencies {\n    '+dep+'\n}\n'
+          g.write_text(s)
+          PY2
+          dart run flutter_launcher_icons
+
+      - name: Analyze project
+        run: flutter analyze --no-fatal-infos
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: PTI-Premium-POS-APK-v1.3
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+          retention-days: 30
